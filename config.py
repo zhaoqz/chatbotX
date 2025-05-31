@@ -302,6 +302,11 @@ def load_config():
 
     logger.info("[INIT] load config: {}".format(drag_sensitive(config)))
 
+
+    if os.path.exists("chatrule.txt"):
+        config['character_desc'] = read_file("chatrule.txt")
+        logger.info("[INIT] load chatrule.txt: {}".format(drag_sensitive(config['character_desc'])))
+
     config.load_user_datas()
 
 
