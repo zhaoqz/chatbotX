@@ -90,6 +90,8 @@ CLAUDE_4_OPUS = "claude-opus-4-0"
 
 DEEPSEEK_CHAT = "deepseek-chat"  # DeepSeek-V3对话模型
 DEEPSEEK_REASONER = "deepseek-reasoner"  # DeepSeek-R1模型
+DEEPSEEK_V3 = "deepseek-v3-250324"  # DeepSeek-V3对话模型-火山引擎
+DEEPSEEK_R1 = "deepseek-r1-250528"  # DeepSeek-R1模型-火山引擎
 
 GITEE_AI_MODEL_LIST = ["Yi-34B-Chat", "InternVL2-8B", "deepseek-coder-33B-instruct", "InternVL2.5-26B", "Qwen2-VL-72B", "Qwen2.5-32B-Instruct", "glm-4-9b-chat", "codegeex4-all-9b", "Qwen2.5-Coder-32B-Instruct", "Qwen2.5-72B-Instruct", "Qwen2.5-7B-Instruct", "Qwen2-72B-Instruct", "Qwen2-7B-Instruct", "code-raccoon-v1", "Qwen2.5-14B-Instruct"]
 
@@ -111,7 +113,7 @@ MODEL_LIST = [
               "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k",
               QWEN, QWEN_TURBO, QWEN_PLUS, QWEN_MAX,
               LINKAI_35, LINKAI_4_TURBO, LINKAI_4o,
-              DEEPSEEK_CHAT, DEEPSEEK_REASONER,
+              DEEPSEEK_CHAT, DEEPSEEK_REASONER, DEEPSEEK_V3, DEEPSEEK_R1,
               MODELSCOPE
             ]
 
