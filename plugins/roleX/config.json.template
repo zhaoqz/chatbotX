@@ -1,0 +1,16 @@
+{
+  "database": {
+    "host": "localhost",
+    "port": 3306,
+    "user": "your_username",
+    "password": "your_password",
+    "database": "chatbot",
+    "charset": "utf8mb4",
+    "autocommit": true
+  },
+  "plugin_config": {
+    "plugin_id": "FP1006",
+    "biz_code": "B1006001",
+    "default_model": "gpt-3.5-turbo"
+  }
+}

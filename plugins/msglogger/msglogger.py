@@ -22,9 +22,9 @@ import pymysql
     name="MsgLogger",
     desire_priority=0,
     hidden=False,
-    desc="A plugin that logs all messages and replies to database",
+    desc="A plugin that logs all feishu messages and replies to database",
     version="0.2",
-    author="AI Assistant",
+    author="zhaoqz",
 )
 class MsgLogger(Plugin):
     def __init__(self):
@@ -77,7 +77,7 @@ class MsgLogger(Plugin):
         
         # 创建消息表，添加话题相关字段和AI回复触发标记
         cursor.execute('''
-        CREATE TABLE IF NOT EXISTS messages (
+        CREATE TABLE IF NOT EXISTS feishu_messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id TEXT NOT NULL,
             user_id TEXT,
@@ -98,14 +98,14 @@ class MsgLogger(Plugin):
         ''')
         
         # 为新字段添加索引
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_parent_id ON messages(parent_id)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_root_id ON messages(root_id)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_thread_id ON messages(thread_id)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_ai_replied ON messages(ai_replied)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_parent_id ON feishu_messages(parent_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_root_id ON feishu_messages(root_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_thread_id ON feishu_messages(thread_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_ai_replied ON feishu_messages(ai_replied)')
         
         # 创建回复表
         cursor.execute('''
-        CREATE TABLE IF NOT EXISTS replies (
+        CREATE TABLE IF NOT EXISTS feishu_replies (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id TEXT NOT NULL,
             content TEXT,
@@ -114,8 +114,7 @@ class MsgLogger(Plugin):
             receiver_id TEXT,
             timestamp INTEGER,
             time TEXT,
-            related_msg_id INTEGER,
-            FOREIGN KEY (related_msg_id) REFERENCES messages (id)
+            related_msg_id INTEGER
         )
         ''')
         
@@ -140,7 +139,7 @@ class MsgLogger(Plugin):
             
             # 创建消息表，添加话题相关字段和AI回复触发标记
             cursor.execute('''
-            CREATE TABLE IF NOT EXISTS messages (
+            CREATE TABLE IF NOT EXISTS feishu_messages (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 session_id VARCHAR(255) NOT NULL,
                 user_id VARCHAR(255),
@@ -169,7 +168,7 @@ class MsgLogger(Plugin):
             
             # 创建回复表
             cursor.execute('''
-            CREATE TABLE IF NOT EXISTS replies (
+            CREATE TABLE IF NOT EXISTS feishu_replies (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 session_id VARCHAR(255) NOT NULL,
                 content TEXT,
@@ -180,8 +179,7 @@ class MsgLogger(Plugin):
                 time VARCHAR(50),
                 related_msg_id INT,
                 INDEX idx_session_id (session_id),
-                INDEX idx_timestamp (timestamp),
-                FOREIGN KEY (related_msg_id) REFERENCES messages (id) ON DELETE SET NULL
+                INDEX idx_timestamp (timestamp)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             ''')
             
@@ -263,7 +261,7 @@ class MsgLogger(Plugin):
                 cursor = conn.cursor()
                 
                 cursor.execute(
-                    "INSERT INTO messages (session_id, user_id, user_nickname, content, msg_type, is_group, group_id, group_name, timestamp, time, needs_processing, parent_id, root_id, thread_id, ai_replied) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    "INSERT INTO feishu_messages (session_id, user_id, user_nickname, content, msg_type, is_group, group_id, group_name, timestamp, time, needs_processing, parent_id, root_id, thread_id, ai_replied) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     (
                         session_id,
                         user_id,
@@ -294,7 +292,7 @@ class MsgLogger(Plugin):
                 cursor = conn.cursor()
                 
                 cursor.execute(
-                    "INSERT INTO messages (session_id, user_id, user_nickname, content, msg_type, is_group, group_id, group_name, timestamp, time, needs_processing, parent_id, root_id, thread_id, ai_replied) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO feishu_messages (session_id, user_id, user_nickname, content, msg_type, is_group, group_id, group_name, timestamp, time, needs_processing, parent_id, root_id, thread_id, ai_replied) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         session_id,
                         user_id,
@@ -373,11 +371,11 @@ class MsgLogger(Plugin):
                 if self.use_mysql:
                     conn = self._get_mysql_connection()
                     cursor = conn.cursor()
-                    cursor.execute("UPDATE messages SET ai_replied = %s WHERE id = %s", (True, msg_id))
+                    cursor.execute("UPDATE feishu_messages SET ai_replied = %s WHERE id = %s", (True, msg_id))
                 else:
                     conn = sqlite3.connect(self.db_path)
                     cursor = conn.cursor()
-                    cursor.execute("UPDATE messages SET ai_replied = ? WHERE id = ?", (True, msg_id))
+                    cursor.execute("UPDATE feishu_messages SET ai_replied = ? WHERE id = ?", (True, msg_id))
                 
                 conn.commit()
                 conn.close()
@@ -389,7 +387,7 @@ class MsgLogger(Plugin):
                 cursor = conn.cursor()
                 
                 cursor.execute(
-                    "INSERT INTO replies (session_id, content, input_content, reply_type, receiver_id, timestamp, time, related_msg_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                    "INSERT INTO feishu_replies (session_id, content, input_content, reply_type, receiver_id, timestamp, time, related_msg_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                     (
                         context.get("session_id", ""),
                         content,
@@ -407,7 +405,7 @@ class MsgLogger(Plugin):
                 cursor = conn.cursor()
                 
                 cursor.execute(
-                    "INSERT INTO replies (session_id, content, input_content, reply_type, receiver_id, timestamp, time, related_msg_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO feishu_replies (session_id, content, input_content, reply_type, receiver_id, timestamp, time, related_msg_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         context.get("session_id", ""),
                         content,
