@@ -34,14 +34,53 @@ class ChatChannel(Channel):
         _thread.start()
 
     # 根据消息构造context，消息内容相关的触发项写在这里
+    # 在_compose_context方法中添加会话管理逻辑
     def _compose_context(self, ctype: ContextType, content, **kwargs):
         context = Context(ctype, content)
         context.kwargs = kwargs
-        # context首次传入时，origin_ctype是None,
-        # 引入的起因是：当输入语音时，会嵌套生成两个context，第一步语音转文本，第二步通过文本生成文字回复。
-        # origin_ctype用于第二步文本回复时，判断是否需要匹配前缀，如果是私聊的语音，就不需要匹配前缀
+        
         if "origin_ctype" not in context:
             context["origin_ctype"] = ctype
+            
+        first_in = "receiver" not in context
+        
+        if first_in:
+            config = conf()
+            cmsg = context["msg"]
+            
+            # 检查是否有目标会话ID（来自会话管理插件）
+            target_session_id = context.kwargs.get('target_session_id')
+            
+            if target_session_id:
+                # 使用指定的会话ID
+                session_id = target_session_id
+                context["session_id"] = session_id
+                context["receiver"] = cmsg.other_user_id
+            else:
+                # 原有的session_id设置逻辑
+                if context.get("isgroup", False):
+                    group_name = cmsg.other_user_nickname
+                    group_id = cmsg.other_user_id
+                    
+                    group_name_white_list = config.get("group_name_white_list", [])
+                    group_name_keyword_white_list = config.get("group_name_keyword_white_list", [])
+                    
+                    if (
+                        "ALL_GROUP" in group_name_white_list
+                        or group_name in group_name_white_list
+                        or any([keyword in group_name for keyword in group_name_keyword_white_list])
+                    ):
+                        group_chat_in_one_session = conf().get("group_chat_in_one_session", [])
+                        session_id = cmsg.actual_user_id
+                        if any([keyword in group_name for keyword in group_chat_in_one_session]):
+                            session_id = group_id
+                    else:
+                        return None
+                        
+                    context["session_id"] = session_id
+                else:
+                    context["session_id"] = cmsg.other_user_id
+                    
         # context首次传入时，receiver是None，根据类型设置receiver
         first_in = "receiver" not in context
         # 群名匹配过程，设置session_id和receiver

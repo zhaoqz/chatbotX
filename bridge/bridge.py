@@ -67,16 +67,13 @@ class Bridge(object):
 
     # 模型对应的接口
     def get_bot(self, typename):
-        if self.bots.get(typename) is None:
+        if typename not in self.bots:
             logger.info("create bot {} for {}".format(self.btype[typename], typename))
-            if typename == "text_to_voice":
-                self.bots[typename] = create_voice(self.btype[typename])
-            elif typename == "voice_to_text":
-                self.bots[typename] = create_voice(self.btype[typename])
-            elif typename == "chat":
-                self.bots[typename] = create_bot(self.btype[typename])
-            elif typename == "translate":
-                self.bots[typename] = create_translator(self.btype[typename])
+            self.bots[typename] = create_bot(self.btype[typename])
+        else:
+            # 临时添加：强制重新创建Bot以应用新配置
+            logger.info(f"[Bridge] 强制重新创建Bot: {typename}")
+            self.bots[typename] = create_bot(self.btype[typename])
         return self.bots[typename]
 
     def get_bot_type(self, typename):

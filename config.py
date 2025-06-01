@@ -183,6 +183,21 @@ available_setting = {
     "Minimax_group_id": "",
     "Minimax_base_url": "",
     "web_port": 9899,
+    # 数据库配置 - 用于持久化会话管理
+    "database": {
+        "type": "sqlite",  # 数据库类型，支持 sqlite, mysql, postgresql
+        "host": "localhost",  # 数据库主机地址
+        "port": 3306,  # 数据库端口
+        "username": "",  # 数据库用户名
+        "password": "",  # 数据库密码
+        "database_name": "chatbotx",  # 数据库名称
+        "sqlite_path": "data/chatbotx.db"  # SQLite数据库文件路径
+    },
+    "session_persistence": {
+        "enabled": False,  # 是否启用会话持久化
+        "max_sessions_per_user": 10,  # 每个用户最大会话数
+        "auto_save_interval": 60  # 自动保存间隔（秒）
+    },
 }
 
 
