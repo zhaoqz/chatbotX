@@ -30,7 +30,7 @@ plugins/**/
 plugins/banwords/__pycache__
 plugins/banwords/lib/__pycache__
 !plugins/hello
-!plugins/role
+plugins/role
 !plugins/keyword
 !plugins/linkai
 !plugins/agent

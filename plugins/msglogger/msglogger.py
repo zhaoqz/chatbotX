@@ -75,7 +75,7 @@ class MsgLogger(Plugin):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # 创建消息表，添加 needs_processing 字段
+        # 创建消息表，添加话题相关字段和AI回复触发标记
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,9 +89,19 @@ class MsgLogger(Plugin):
             group_name TEXT,
             timestamp INTEGER,
             time TEXT,
-            needs_processing BOOLEAN DEFAULT 0
+            needs_processing BOOLEAN DEFAULT 0,
+            parent_id TEXT DEFAULT NULL,
+            root_id TEXT DEFAULT NULL,
+            thread_id TEXT DEFAULT NULL,
+            ai_replied BOOLEAN DEFAULT 0
         )
         ''')
+        
+        # 为新字段添加索引
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_parent_id ON messages(parent_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_root_id ON messages(root_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_thread_id ON messages(thread_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_ai_replied ON messages(ai_replied)')
         
         # 创建回复表
         cursor.execute('''
@@ -99,6 +109,7 @@ class MsgLogger(Plugin):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id TEXT NOT NULL,
             content TEXT,
+            input_content TEXT,
             reply_type TEXT,
             receiver_id TEXT,
             timestamp INTEGER,
@@ -127,7 +138,7 @@ class MsgLogger(Plugin):
             cursor.execute(f"CREATE DATABASE IF NOT EXISTS {self.mysql_config['database']} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
             cursor.execute(f"USE {self.mysql_config['database']}")
             
-            # 创建消息表，添加 needs_processing 字段
+            # 创建消息表，添加话题相关字段和AI回复触发标记
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS messages (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -142,9 +153,17 @@ class MsgLogger(Plugin):
                 timestamp INT,
                 time VARCHAR(50),
                 needs_processing BOOLEAN DEFAULT 0,
+                parent_id VARCHAR(255) DEFAULT NULL COMMENT '父消息ID（话题回复时使用）',
+                root_id VARCHAR(255) DEFAULT NULL COMMENT '根消息ID（话题回复时使用）',
+                thread_id VARCHAR(255) DEFAULT NULL COMMENT '话题线程ID（话题回复时使用）',
+                ai_replied BOOLEAN DEFAULT 0 COMMENT '是否触发了AI回复',
                 INDEX idx_session_id (session_id),
                 INDEX idx_timestamp (timestamp),
-                INDEX idx_needs_processing (needs_processing)
+                INDEX idx_needs_processing (needs_processing),
+                INDEX idx_parent_id (parent_id),
+                INDEX idx_root_id (root_id),
+                INDEX idx_thread_id (thread_id),
+                INDEX idx_ai_replied (ai_replied)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             ''')
             
@@ -154,6 +173,7 @@ class MsgLogger(Plugin):
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 session_id VARCHAR(255) NOT NULL,
                 content TEXT,
+                input_content TEXT,
                 reply_type VARCHAR(50),
                 receiver_id VARCHAR(255),
                 timestamp INT,
@@ -202,6 +222,9 @@ class MsgLogger(Plugin):
             group_id = ""
             group_name = ""
             needs_processing = False
+            parent_id = None
+            root_id = None
+            thread_id = None
             
             # 如果有 context，提取详细信息
             if context:
@@ -221,6 +244,18 @@ class MsgLogger(Plugin):
                     if is_group:
                         group_id = getattr(msg, 'other_user_id', '')
                         group_name = getattr(msg, 'other_user_nickname', '')
+                    
+                    # 提取话题相关信息（飞书消息特有）
+                    if hasattr(msg, 'raw_message') and msg.raw_message:
+                        raw_msg = msg.raw_message
+                        if isinstance(raw_msg, dict):
+                            event_data = raw_msg.get('event', {})
+                            message_data = event_data.get('message', {})
+                            
+                            # 提取话题相关字段
+                            parent_id = message_data.get('parent_id')
+                            root_id = message_data.get('root_id')
+                            thread_id = message_data.get('thread_id')
             
             if self.use_mysql:
                 # 使用MySQL记录
@@ -228,7 +263,7 @@ class MsgLogger(Plugin):
                 cursor = conn.cursor()
                 
                 cursor.execute(
-                    "INSERT INTO messages (session_id, user_id, user_nickname, content, msg_type, is_group, group_id, group_name, timestamp, time, needs_processing) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    "INSERT INTO messages (session_id, user_id, user_nickname, content, msg_type, is_group, group_id, group_name, timestamp, time, needs_processing, parent_id, root_id, thread_id, ai_replied) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     (
                         session_id,
                         user_id,
@@ -240,7 +275,11 @@ class MsgLogger(Plugin):
                         group_name,
                         timestamp,
                         time_str,
-                        needs_processing
+                        needs_processing,
+                        parent_id,
+                        root_id,
+                        thread_id,
+                        False  # ai_replied 初始为 False
                     )
                 )
                 
@@ -255,7 +294,7 @@ class MsgLogger(Plugin):
                 cursor = conn.cursor()
                 
                 cursor.execute(
-                    "INSERT INTO messages (session_id, user_id, user_nickname, content, msg_type, is_group, group_id, group_name, timestamp, time, needs_processing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO messages (session_id, user_id, user_nickname, content, msg_type, is_group, group_id, group_name, timestamp, time, needs_processing, parent_id, root_id, thread_id, ai_replied) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         session_id,
                         user_id,
@@ -267,7 +306,11 @@ class MsgLogger(Plugin):
                         group_name,
                         timestamp,
                         time_str,
-                        needs_processing
+                        needs_processing,
+                        parent_id,
+                        root_id,
+                        thread_id,
+                        False  # ai_replied 初始为 False
                     )
                 )
                 
@@ -279,10 +322,10 @@ class MsgLogger(Plugin):
             conn.commit()
             conn.close()
             
-            logger.debug(f"[MsgLogger] 记录消息: {content}, ID: {msg_id}, 需要处理: {needs_processing}")
+            logger.debug(f"[MsgLogger] 记录消息: {content}, ID: {msg_id}, 需要处理: {needs_processing}, 话题信息: parent_id={parent_id}, root_id={root_id}, thread_id={thread_id}")
         except Exception as e:
             logger.error(f"[MsgLogger] 记录消息异常: {e}")
-    
+
     def on_send_reply(self, e_context: EventContext):
         """记录发送的回复"""
         context = e_context["context"]
@@ -300,7 +343,16 @@ class MsgLogger(Plugin):
             if reply.type == ReplyType.TEXT:
                 content = reply.content
             elif reply.type == ReplyType.ERROR or reply.type == ReplyType.INFO:
-                content = f"[{reply.type}] {reply.content}"
+                # 去除错误前缀，只保留实际内容
+                content = reply.content
+                # 处理各种可能的错误前缀格式
+                prefixes = ["[ERROR] ", "[INFO] ", "ERROR: ", "INFO: "]
+                for prefix in prefixes:
+                    # 循环处理，确保多重前缀也能被清除
+                    while content.startswith(prefix):
+                        content = content.replace(prefix, "", 1)
+                # 去除开头可能的空白字符
+                content = content.strip()
             elif reply.type == ReplyType.IMAGE_URL:
                 content = f"[图片] {reply.content}"
             elif reply.type == ReplyType.VOICE:
@@ -315,6 +367,22 @@ class MsgLogger(Plugin):
             elif isinstance(context, dict) and "content" in context:
                 input_content = context["content"]
             
+            # 更新原消息的 ai_replied 字段为 True
+            msg_id = context.get("db_msg_id")
+            if msg_id:
+                if self.use_mysql:
+                    conn = self._get_mysql_connection()
+                    cursor = conn.cursor()
+                    cursor.execute("UPDATE messages SET ai_replied = %s WHERE id = %s", (True, msg_id))
+                else:
+                    conn = sqlite3.connect(self.db_path)
+                    cursor = conn.cursor()
+                    cursor.execute("UPDATE messages SET ai_replied = ? WHERE id = ?", (True, msg_id))
+                
+                conn.commit()
+                conn.close()
+            
+            # 记录回复
             if self.use_mysql:
                 # 使用MySQL记录
                 conn = self._get_mysql_connection()
@@ -355,7 +423,7 @@ class MsgLogger(Plugin):
             conn.commit()
             conn.close()
             
-            logger.debug(f"[MsgLogger] 记录回复: {content}, 输入内容: {input_content}")
+            logger.debug(f"[MsgLogger] 记录回复: {content}, 输入内容: {input_content}, 已标记消息ID {msg_id} 为AI已回复")
         except Exception as e:
             logger.error(f"[MsgLogger] 记录回复异常: {e}")
     
@@ -380,3 +448,4 @@ class MsgLogger(Plugin):
         except Exception as e:
             logger.exception(e)
             return {"db_path": "message_logs.db", "use_mysql": False}
+

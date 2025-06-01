@@ -22,6 +22,9 @@ from channel.chat_channel import ChatChannel, check_prefix
 from common import utils
 import json
 import os
+# 在文件顶部添加导入
+from plugins.event import Event, EventContext
+from plugins.plugin_manager import PluginManager
 
 URL_VERIFICATION = "url_verification"
 
@@ -154,24 +157,25 @@ class FeishuController:
     def GET(self):
         return "Feishu service start success!"
 
+    # 在POST方法中，修改消息处理部分：
     def POST(self):
         try:
             channel = FeiShuChanel()
-
+    
             request = json.loads(web.data().decode("utf-8"))
             logger.debug(f"[FeiShu] receive request: {request}")
-
+    
             # 1.事件订阅回调验证
             if request.get("type") == URL_VERIFICATION:
                 varify_res = {"challenge": request.get("challenge")}
                 return json.dumps(varify_res)
-
+    
             # 2.消息接收处理
             # token 校验
             header = request.get("header")
             if not header or header.get("token") != channel.feishu_token:
                 return self.FAILED_MSG
-
+    
             # 处理消息事件
             event = request.get("event")
             if header.get("event_type") == self.MESSAGE_RECEIVE_TYPE and event:
@@ -179,22 +183,16 @@ class FeishuController:
                     logger.warning(f"[FeiShu] invalid message, msg={request}")
                     return self.FAILED_MSG
                 msg = event.get("message")
-
+    
                 # 幂等判断
                 if channel.receivedMsgs.get(msg.get("message_id")):
                     logger.warning(f"[FeiShu] repeat msg filtered, event_id={header.get('event_id')}")
                     return self.SUCCESS_MSG
                 channel.receivedMsgs[msg.get("message_id")] = True
-
+    
                 is_group = False
                 chat_type = msg.get("chat_type")
                 if chat_type == "group":
-                    if not msg.get("mentions") and msg.get("message_type") == "text":
-                        # 群聊中未@不响应
-                        return self.SUCCESS_MSG
-                    if msg.get("mentions")[0].get("name") != conf().get("feishu_bot_name") and msg.get("message_type") == "text":
-                        # 不是@机器人，不响应
-                        return self.SUCCESS_MSG
                     # 群聊
                     is_group = True
                     receive_id_type = "chat_id"
@@ -203,11 +201,13 @@ class FeishuController:
                 else:
                     logger.warning("[FeiShu] message ignore")
                     return self.SUCCESS_MSG
+                
                 # 构造飞书消息对象
                 feishu_msg = FeishuMessage(event, is_group=is_group, access_token=channel.fetch_access_token())
                 if not feishu_msg:
                     return self.SUCCESS_MSG
-
+                
+                # 先创建上下文，用于记录所有消息
                 context = self._compose_context(
                     feishu_msg.ctype,
                     feishu_msg.content,
@@ -216,11 +216,28 @@ class FeishuController:
                     receive_id_type=receive_id_type,
                     no_need_at=True
                 )
+                
+                # 触发消息记录事件，确保所有消息都被记录
+                if context:
+                    # 创建一个事件上下文，仅用于记录消息
+                    log_context = EventContext(Event.ON_RECEIVE_MESSAGE, {"context": context})
+                    PluginManager().emit_event(log_context)
+                
+                # 群聊中未@不响应处理逻辑
+                if is_group:
+                    if not msg.get("mentions") and msg.get("message_type") == "text":
+                        # 群聊中未@不响应，但消息已记录
+                        return self.SUCCESS_MSG
+                    if msg.get("mentions") and msg.get("mentions")[0].get("name") != conf().get("feishu_bot_name") and msg.get("message_type") == "text":
+                        # 不是@机器人，不响应，但消息已记录
+                        return self.SUCCESS_MSG
+                
+                # 继续处理需要响应的消息
                 if context:
                     channel.produce(context)
                 logger.info(f"[FeiShu] query={feishu_msg.content}, type={feishu_msg.ctype}")
             return self.SUCCESS_MSG
-
+    
         except Exception as e:
             logger.error(e)
             return self.FAILED_MSG
