@@ -84,16 +84,110 @@ class FeishuMessage(ChatMessage):
 
         self.from_user_id = sender.get("sender_id").get("open_id")
         self.to_user_id = event.get("app_id")
+        
+        # 获取并缓存用户信息
+        self._load_user_info(sender, access_token)
+        
         if is_group:
             # 群聊
             self.other_user_id = msg.get("chat_id")
             self.actual_user_id = self.from_user_id
             self.content = self.content.replace("@_user_1", "").strip()
-            self.actual_user_nickname = ""
+            
+            # 获取群聊信息
+            self._load_group_info(msg.get("chat_id"), access_token)
         else:
             # 私聊
             self.other_user_id = self.from_user_id
             self.actual_user_id = self.from_user_id
+    
+    def _load_user_info(self, sender, access_token):
+        """加载并缓存用户信息"""
+        try:
+            sender_id = sender.get("sender_id", {}).get("open_id")
+            tenant_key = sender.get("tenant_key", "")
+            
+            if sender_id and access_token:
+                # 先从缓存获取
+                cached_user = self.user_cache.get_user_info(sender_id, tenant_key)
+                if cached_user:
+                    self.from_user_nickname = cached_user.get('name') or cached_user.get('nickname') or f"用户({sender_id[:8]}...)"
+                    logger.debug(f"[FeiShu] Using cached user info for {sender_id}")
+                else:
+                    # 缓存未命中，调用API获取用户信息
+                    user_info = self._get_user_info_by_open_id(sender_id, access_token, tenant_key)
+                    if user_info:
+                        self.from_user_nickname = user_info
+                    else:
+                        self.from_user_nickname = f"用户({sender_id[:8]}...)"
+            else:
+                self.from_user_nickname = "未知用户"
+                
+        except Exception as e:
+            logger.error(f"[FeiShu] Failed to load user info: {e}")
+            self.from_user_nickname = "未知用户"
+    
+    def _load_group_info(self, chat_id, access_token):
+        """加载群聊信息"""
+        try:
+            if chat_id and access_token:
+                # 先从缓存获取群聊信息
+                cached_group = self.user_cache.get_group_info(chat_id)
+                if cached_group:
+                    self.other_user_nickname = cached_group.get('name', f"群聊({chat_id[:8]}...)")
+                    logger.debug(f"[FeiShu] Using cached group info for {chat_id}")
+                else:
+                    # 缓存未命中，调用API获取群聊信息
+                    group_info = self._get_group_info_by_chat_id(chat_id, access_token)
+                    if group_info:
+                        self.other_user_nickname = group_info
+                    else:
+                        self.other_user_nickname = f"群聊({chat_id[:8]}...)"
+            else:
+                self.other_user_nickname = "未知群聊"
+                
+        except Exception as e:
+            logger.error(f"[FeiShu] Failed to load group info: {e}")
+            self.other_user_nickname = "未知群聊"
+    
+    def _get_group_info_by_chat_id(self, chat_id: str, access_token: str) -> Optional[str]:
+        """通过 chat_id 获取群聊信息"""
+        try:
+            url = f"https://open.feishu.cn/open-apis/im/v1/chats/{chat_id}"
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json; charset=utf-8"
+            }
+            
+            response = requests.get(url=url, headers=headers)
+            logger.debug(f"[FeiShu] Get group info response: {response.status_code} {response.text}")
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result.get('code') == 0:
+                    data = result.get('data', {})
+                    
+                    # 保存群聊信息到缓存
+                    self.user_cache.save_group_info(chat_id, data)
+                    
+                    # 返回群聊名称
+                    name = data.get('name', '')
+                    if name and name.strip():
+                        return name.strip()
+                    
+                    description = data.get('description', '')
+                    if description and description.strip():
+                        return description.strip()
+                        
+                else:
+                    logger.warning(f"[FeiShu] API error when getting group info for {chat_id}: {result.get('msg')}")
+            else:
+                logger.warning(f"[FeiShu] HTTP error when getting group info for {chat_id}: {response.status_code}")
+                
+        except Exception as e:
+            logger.error(f"[FeiShu] Exception when getting group info for {chat_id}: {e}")
+        
+        return None
 
     def _get_message_content(self, message_id: str, access_token: str) -> str:
         """根据飞书官方API获取指定消息的内容"""

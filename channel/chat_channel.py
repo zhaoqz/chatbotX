@@ -49,6 +49,8 @@ class ChatChannel(Channel):
             config = conf()
             cmsg = context["msg"]
             user_data = conf().get_user_data(cmsg.from_user_id)
+            logger.info(f"FIRST in, cmsg={cmsg}, user_data={user_data},  context={context}")
+
             context["openai_api_key"] = user_data.get("openai_api_key")
             context["gpt_model"] = user_data.get("gpt_model")
             if context.get("isgroup", False):

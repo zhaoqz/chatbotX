@@ -93,31 +93,31 @@ class FeishuUserCache:
                 join_time BIGINT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                last_api_call TIMESTAMP,
-                cache_expire_time TIMESTAMP,
+                last_api_call TIMESTAMP NULL,
+                cache_expire_time TIMESTAMP NULL,
                 UNIQUE KEY unique_user_tenant (open_id, tenant_key)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         ''')
         
-        # 创建索引 - 使用兼容的语法
-        try:
-            cursor.execute('CREATE INDEX idx_tenant_key ON feishu_user_cache(tenant_key)')
-        except pymysql.err.OperationalError as e:
-            # 如果索引已存在，忽略错误
-            if "Duplicate key name" not in str(e):
-                logger.error(f"[FeishuUserCache] 创建索引失败: {e}")
-        
-        try:
-            cursor.execute('CREATE INDEX idx_sender_type ON feishu_user_cache(sender_type)')
-        except pymysql.err.OperationalError as e:
-            if "Duplicate key name" not in str(e):
-                logger.error(f"[FeishuUserCache] 创建索引失败: {e}")
-        
-        try:
-            cursor.execute('CREATE INDEX idx_cache_expire ON feishu_user_cache(cache_expire_time)')
-        except pymysql.err.OperationalError as e:
-            if "Duplicate key name" not in str(e):
-                logger.error(f"[FeishuUserCache] 创建索引失败: {e}")
+        # 同时添加群聊缓存表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS feishu_group_cache (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                chat_id VARCHAR(255) NOT NULL UNIQUE,
+                name VARCHAR(255),
+                description TEXT,
+                owner_id VARCHAR(255),
+                chat_mode VARCHAR(50),
+                chat_type VARCHAR(50),
+                chat_tag VARCHAR(50),
+                member_count INT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                cache_expire_time TIMESTAMP NULL,
+                INDEX idx_chat_id (chat_id),
+                INDEX idx_cache_expire (cache_expire_time)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ''')
         
         conn.commit()
         cursor.close()
@@ -165,7 +165,7 @@ class FeishuUserCache:
                     department_ids, leader_user_id, dotted_line_leader_user_ids,
                     job_level_id, job_family_id, join_time, last_api_call, cache_expire_time
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 ON DUPLICATE KEY UPDATE
@@ -234,19 +234,87 @@ class FeishuUserCache:
             logger.error(f"[FeishuUserCache] Error saving user info: {e}")
             return False
     
+    def get_group_info(self, chat_id: str) -> Optional[Dict[str, Any]]:
+        """从缓存获取群聊信息"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT * FROM feishu_group_cache 
+            WHERE chat_id = %s
+            AND (cache_expire_time IS NULL OR cache_expire_time > NOW())
+        ''', (chat_id,))
+        
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        return row
+    
+    def save_group_info(self, chat_id: str, group_data: Dict[str, Any]) -> bool:
+        """保存群聊信息到缓存"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            # 计算缓存过期时间（24小时后）
+            expire_time = datetime.now() + timedelta(hours=24)
+            
+            cursor.execute('''
+                INSERT INTO feishu_group_cache (
+                    chat_id, name, description, owner_id, chat_mode, chat_type, chat_tag, 
+                    member_count, cache_expire_time
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    name = VALUES(name),
+                    description = VALUES(description),
+                    owner_id = VALUES(owner_id),
+                    chat_mode = VALUES(chat_mode),
+                    chat_type = VALUES(chat_type),
+                    chat_tag = VALUES(chat_tag),
+                    member_count = VALUES(member_count),
+                    cache_expire_time = VALUES(cache_expire_time)
+            ''', (
+                chat_id,
+                group_data.get('name'),
+                group_data.get('description'),
+                group_data.get('owner_id'),
+                group_data.get('chat_mode'),
+                group_data.get('chat_type'),
+                group_data.get('chat_tag'),
+                group_data.get('user_count'),
+                expire_time
+            ))
+            
+            conn.commit()
+            conn.close()
+            return True
+            
+        except Exception as e:
+            logger.error(f"[FeishuUserCache] Error saving group info: {e}")
+            return False
+    
     def clean_expired_cache(self):
         """清理过期缓存"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
+        # 清理用户缓存
         cursor.execute('''
             DELETE FROM feishu_user_cache 
             WHERE cache_expire_time IS NOT NULL AND cache_expire_time < NOW()
         ''')
+        user_deleted = cursor.rowcount
         
-        deleted_count = cursor.rowcount
+        # 清理群聊缓存
+        cursor.execute('''
+            DELETE FROM feishu_group_cache 
+            WHERE cache_expire_time IS NOT NULL AND cache_expire_time < NOW()
+        ''')
+        group_deleted = cursor.rowcount
+        
         conn.commit()
         conn.close()
         
-        if deleted_count > 0:
-            logger.info(f"[FeishuUserCache] Cleaned {deleted_count} expired cache entries")
+        if user_deleted > 0 or group_deleted > 0:
+            logger.info(f"[FeishuUserCache] Cleaned {user_deleted} expired user cache entries and {group_deleted} expired group cache entries")
