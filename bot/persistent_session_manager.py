@@ -159,12 +159,11 @@ class DatabaseManager:
         return session_id
         
     def get_session_messages(self, session_id: str) -> List[Dict]:
-        """获取会话的所有消息"""
+        """获取会话的消息历史"""
         cursor = self.conn.cursor()
         cursor.execute('''
-            SELECT role, content, created_at
-            FROM chat_messages
-            WHERE session_id = %s
+            SELECT role, content FROM chat_messages 
+            WHERE session_id = %s 
             ORDER BY created_at ASC
         ''', (session_id,))
         
@@ -172,9 +171,9 @@ class DatabaseManager:
         for row in cursor.fetchall():
             messages.append({
                 'role': row[0],
-                'content': row[1],
-                'created_at': row[2]
+                'content': row[1]
             })
+        
         return messages
         
     def save_session(self, session: PersistentSession):
@@ -242,8 +241,36 @@ class PersistentSessionManager(SessionManager):
         session_id = self.db_manager.create_session(user_id, title, system_prompt)
         return session_id
         
+    def session_query(self, query, session_id):
+        """重写父类方法，支持自动创建session"""
+        # 对于普通用户消息，session_id通常就是user_id
+        user_id = session_id
+        session = self.build_session(session_id, user_id=user_id)
+        session.add_query(query)
+        try:
+            max_tokens = conf().get("conversation_max_tokens", 1000)
+            total_tokens = session.discard_exceeding(max_tokens, None)
+            logger.debug("prompt tokens used={}".format(total_tokens))
+        except Exception as e:
+            logger.warning("Exception when counting tokens precisely for prompt: {}".format(str(e)))
+        return session
+
+    def session_reply(self, reply, session_id, total_tokens=None):
+        """重写父类方法，支持自动创建session"""
+        # 对于普通用户消息，session_id通常就是user_id
+        user_id = session_id
+        session = self.build_session(session_id, user_id=user_id)
+        session.add_reply(reply)
+        try:
+            max_tokens = conf().get("conversation_max_tokens", 1000)
+            tokens_cnt = session.discard_exceeding(max_tokens, total_tokens)
+            logger.debug("raw total_tokens={}, savesession tokens={}".format(total_tokens, tokens_cnt))
+        except Exception as e:
+            logger.warning("Exception when counting tokens precisely for session: {}".format(str(e)))
+        return session
+        
     def build_session(self, session_id, system_prompt=None, user_id=None):
-        """构建会话，支持从数据库加载"""
+        """构建会话，支持从数据库加载，如果用户没有会话则自动创建"""
         if session_id in self.active_sessions:
             return self.active_sessions[session_id]
             
@@ -254,9 +281,33 @@ class PersistentSessionManager(SessionManager):
         if session_id and self._session_exists(session_id):
             session.load_from_db()
         else:
-            # 新会话，初始化系统提示
-            if system_prompt:
-                session.reset()
+            # 检查是否是用户ID，如果是则为该用户自动创建默认会话
+            if user_id and session_id == user_id:
+                # 检查用户是否已有会话
+                user_sessions = self.db_manager.get_user_sessions(user_id, limit=1)
+                if not user_sessions:
+                    # 用户没有任何会话，创建默认会话
+                    from datetime import datetime
+                    default_title = f"对话 {datetime.now().strftime('%m-%d %H:%M')}"
+                    actual_session_id = self.create_new_session(user_id, default_title, system_prompt)
+                    logger.info(f"[PersistentSessionManager] 为用户 {user_id} 自动创建默认会话: {actual_session_id}")
+                    
+                    # 重新创建session对象，使用实际的session_id
+                    session = PersistentSession(actual_session_id, system_prompt, default_title, self.db_manager)
+                    # 将新创建的session也存储在active_sessions中，使用原始的session_id作为key
+                    self.active_sessions[session_id] = session
+                    return session
+                else:
+                    # 用户已有会话，使用最新的会话
+                    latest_session = user_sessions[0]
+                    actual_session_id = latest_session['id']
+                    session = PersistentSession(actual_session_id, system_prompt, latest_session.get('title'), self.db_manager)
+                    session.load_from_db()
+                    logger.info(f"[PersistentSessionManager] 为用户 {user_id} 使用最新会话: {actual_session_id}")
+            else:
+                # 新会话，初始化系统提示
+                if system_prompt:
+                    session.reset()
                 
         self.active_sessions[session_id] = session
         return session
@@ -275,19 +326,34 @@ class PersistentSessionManager(SessionManager):
         """激活历史会话"""
         # 验证会话属于该用户
         cursor = self.db_manager.conn.cursor()
-        cursor.execute('SELECT 1 FROM chat_sessions WHERE id = %s AND user_id = %s AND is_active = TRUE', 
-                      (session_id, user_id))
-        if not cursor.fetchone():
-            return None
-            
-        return self.build_session(session_id, user_id=user_id)
         
-    def delete_session(self, session_id: str, user_id: str):
-        """删除会话"""
-        self.db_manager.delete_session(session_id, user_id)
+        # 如果session_id长度小于完整UUID，使用LIKE查询
+        if len(session_id) < 36:  # 完整UUID长度为36
+            cursor.execute('SELECT id FROM chat_sessions WHERE id LIKE %s AND user_id = %s AND is_active = TRUE', 
+                          (f'{session_id}%', user_id))
+            result = cursor.fetchone()
+            if not result:
+                return None
+            # 使用找到的完整ID
+            full_session_id = result[0]
+        else:
+            cursor.execute('SELECT 1 FROM chat_sessions WHERE id = %s AND user_id = %s AND is_active = TRUE', 
+                          (session_id, user_id))
+            if not cursor.fetchone():
+                return None
+            full_session_id = session_id
+            
+        return self.build_session(full_session_id, user_id=user_id)
+        
+    def clear_session(self, session_id):
+        """清理会话"""
         if session_id in self.active_sessions:
             del self.active_sessions[session_id]
-
+            
+    def clear_all_session(self):
+        """清理所有会话"""
+        self.active_sessions.clear()
+        
     def check_connection(self):
         """检查数据库连接状态"""
         try:
